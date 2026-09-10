@@ -1,17 +1,59 @@
 version: 2
+
 models:
   - name: fct_zone_daily_snapshot
+    description: >
+      Daily pickup-zone demand snapshot with 1-day metrics and
+      calendar-correct rolling 7-day and 30-day metrics.
+
     tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [zone_id, snapshot_date]
+
     columns:
       - name: zone_id
-        tests: [not_null]
+        description: Pickup taxi zone identifier.
+        tests:
+          - not_null
+
       - name: snapshot_date
-        tests: [not_null]
+        description: Calendar date represented by the snapshot.
+        tests:
+          - not_null
+
       - name: trips_1d
+        description: Number of trips originating in the zone on the snapshot date.
         tests:
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
+
+      - name: trips_7d
+        description: Number of trips originating in the zone over the current and previous 6 calendar days.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: trips_30d
+        description: Number of trips originating in the zone over the current and previous 29 calendar days.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: avg_fare_7d
+        description: Average fare amount per trip over the rolling 7-day period.
+
+      - name: avg_fare_30d
+        description: Average fare amount per trip over the rolling 30-day period.
+
+      - name: avg_duration_min_7d
+        description: Average trip duration in minutes over the rolling 7-day period.
+
+      - name: borough
+        description: NYC borough containing the pickup zone.
+
+      - name: zone_name
+        description: Taxi zone name.

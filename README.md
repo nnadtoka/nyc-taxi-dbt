@@ -1,0 +1,266 @@
+# NYC Taxi dbt Project
+
+A small analytics-engineering project that loads NYC yellow-taxi trip data into
+Postgres and models it with dbt, following a medallion (raw → staging →
+intermediate → mart) layering. The headline model is a per-zone **daily snapshot**
+carrying rolling 1-day / 7-day / 30-day trip and fare metrics.
+
+## The dataset we start from
+
+Source: **NYC Taxi & Limousine Commission (TLC) Trip Record Data** — the public
+yellow-taxi trip records, published monthly as Apache Parquet.
+Documentation: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+
+The raw layer is built from two inputs:
+
+- **Yellow taxi trips** — January and February 2024. Rather than load all ~6M
+  rows, a **10% random sample of trips** is taken (`random_state=42`) while
+  keeping the full date span, giving **597,215 rows**. Sampling on trips (not on
+  dates) is deliberate: every day still appears, so the 7- and 30-day rolling
+  windows stay meaningful. Each row is one trip, with pickup/dropoff timestamps,
+  pickup/dropoff zone IDs, passenger count, distance, and fare components.
+- **Taxi zone lookup** — the full lookup table (**265 rows**) mapping
+  `LocationID` → borough / zone / service zone. Trips reference zones by ID, so
+  this is the join used to attach borough and zone names.
+
+Both are loaded verbatim into Postgres (`raw_yellow_tripdata`, `raw_taxi_zones`)
+with permissive types — cleaning and typing happen downstream in dbt, not on
+ingest, so data-quality decisions live in version-controlled models.
+
+### What the raw data looks like (profiling)
+
+Observations from `analyses/profiling_raw.sql` on the loaded data:
+
+| Check | Result |
+|---|---|
+| Rows dropped by staging quality filters | **1.35%** (589,182 of 597,215 kept) |
+| Date span | **2023-12-31 → 2024-02-29**, 61 distinct days |
+| Zone coverage | **246** of ~262 zones have trips |
+| Snapshot rows vs dense zone-day grid | **8,945** actual vs **15,006** possible (~40% of zone-days have no trips) |
+
+Two quirks worth knowing:
+
+- **Out-of-month straggler.** The Jan/Feb files contain a single 2023-12-31
+  pickup — a known TLC trait where monthly files leak a few adjacent-month
+  timestamps. It shows up as the 61st day.
+- **Sparsity.** ~40% of zone-day combinations have no trips, so those rows are
+  simply absent. This is why a date spine (one row per zone per day) is a natural
+  next step for the snapshot model.
+
+## Layers
+
+- **raw** (`public.raw_*`) — loaded as-is from the sampled CSVs.
+- **staging** (`stg_trips`, `stg_zones`) — cast, rename, and drop only
+  indefensible rows (null timestamps, dropoff ≤ pickup, negative fares).
+- **intermediate** (`int_zone_daily`) — one row per zone per day with daily sums.
+- **mart** (`fct_zone_daily_snapshot`) — periodic snapshot at grain
+  `zone_id × snapshot_date`, with rolling 1d/7d/30d metrics as typed columns.
+
+## Quickstart
+
+```sh
+# 1. prepare the sampled data (writes data/*.csv.gz)
+python prep_data.py
+
+# 2. build and run the Postgres image (data baked in, loaded on first init)
+docker build --tag nyc-taxi .
+docker run --name nyc-taxi --detach --publish 5438:5432 nyc-taxi
+# db available at postgresql://postgres:taxi@localhost:5438/postgres
+
+# 3. build and test the models (classic dbt from the venv)
+.venv/bin/dbt deps  --profiles-dir .
+.venv/bin/dbt run   --profiles-dir .
+.venv/bin/dbt test  --profiles-dir .
+ alias dbt="$(pwd)/.venv/bin/dbt"
+
+# 4. (optional) run the profiling queries
+docker exec -i nyc-taxi psql -U postgres -f - < analyses/profiling_raw.sql
+```
+
+## Analytical questions
+
+The project is driven by analytical questions that determine the required model grain and transformations. We can also look at common routes between pickup and drop-off areas. For each pickup zone and drop-off zone combination, we can analyze how frequently people travel that route, how long those trips take, and how far they travel.
+
+### 1. Demand trends by zone
+
+#### **Question 1.1:** Which zones are experiencing rising or falling demand?
+
+Using `fct_zone_daily_snapshot`:
+
+- Which zones have the highest trailing 7-day activity? 
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q1_1_highest_7d_activity.sql
+```
+
+#### **Question 1.2:**  Which zones are seeing meaningful increases or decreases in recent demand relative to their recent baseline?
+
+Note1: Demand acceleration is measured by comparing average daily trips over the most recent 7 days with the average daily trips over the preceding 23 days.
+
+Note2: To avoid misleading percentage changes from very low-volume zones, the analysis includes only zones with an average of at least 5 trips per day during the prior 23-day period.
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q1_2_demand_acceleration.sql
+```
+
+The results are reported using both relative and absolute change:
+
+- `demand_change_pct` shows the percentage increase or decrease in average daily trips.
+- `daily_trip_change` shows the absolute change in average trips per day.
+
+**Key observations:**
+
+- Sunnyside had the largest relative increase among qualifying zones, at **+47.6%** or **+3.0 trips/day**.
+- Alphabet City increased **+42.9%**, equivalent to **+6.3 trips/day**.
+- JFK Airport increased **+18.0%**, but this represented the largest absolute increase among the highlighted zones at **+73.8 trips/day**.
+- LaGuardia Airport increased **+15.6%**, or **+44.2 trips/day**.
+- West Chelsea/Hudson Yards showed a notable decline of **-12.9%**, or **-22.2 trips/day**.
+- Long Island City/Hunters Point declined **-17.2%**, or **-1.6 trips/day**.
+
+The comparison shows why both relative and absolute change are useful: percentage growth highlights momentum, while absolute change indicates the scale of the demand shift.
+
+
+#### **Question 1.3:**  Which zones have the longest average trip duration? 
+Note: Performed research was done across zones with at least 5 trips in the most recent 7 days
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q1_3_longest_average_duration.sql
+```
+
+
+### 2. When and where does demand peak?
+
+**Question:** How does demand vary by time of day and day of week?
+
+Planned model: `int_zone_hourly`
+
+**Grain:** `zone_id × pickup_date × pickup_hour`
+
+Questions:
+
+#### **Question 2.1:**  What are the busiest hours?
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q2_1_busiest_hours.sql
+```
+
+Taxi demand is strongly concentrated in the **afternoon and early evening**, with a broad sustained peak rather than a single isolated hour. Activity builds through the morning and midday, reaches its highest levels during the afternoon/evening peak, and then gradually declines through the late evening and overnight.
+
+The morning and overnight periods consistently have lower demand than the afternoon/evening period.
+
+#### **Question 2.2:**  What is the peak hour for each zone?
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q2_2_peak_hour_by_zone.sql
+```
+
+Peak demand varies substantially by pickup zone rather than following a single city-wide pattern.
+
+- Many high-volume Manhattan zones peak during the **afternoon and evening**.
+- Morning peaks are more common across many **residential areas in Brooklyn, Queens, and the Bronx**.
+- Some entertainment and nightlife-oriented areas show **late-evening or overnight** peaks.
+- **Airport zones exhibit distinct patterns**, with JFK showing an afternoon/evening peak and LaGuardia a midday peak.
+
+Overall, the analysis shows that demand timing is strongly influenced by the type and location of each pickup zone.
+
+#### **Question 2.3:**  How do demand patterns differ by borough or service zone?
+
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q2_3_top_origin_destination_pairs.sql
+```
+
+The most frequently traveled pickup-to-drop-off pairs are concentrated within **Manhattan**, particularly among dense residential, commercial, and transit-oriented areas such as the Upper East Side, Upper West Side, Midtown, and nearby neighborhoods.
+
+Several high-volume pairs are trips within the same zone, showing that substantial taxi activity also occurs over relatively local journeys. The routes with the highest trip volume broadly overlap with those generating the most passenger charges, although the rankings are not identical.
+
+#### ** Question 2.4:** Do weekday and weekend patterns differ?
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q2_4_weekday_vs_weekend.sql
+```
+
+
+Weekday and weekend demand have distinctly different hourly patterns.
+
+- **Late-night and overnight demand is much stronger on weekends**, with the largest weekend uplift occurring after midnight and again late in the evening.
+- **Morning demand is substantially stronger on weekdays**, particularly during the early commute period.
+- Around **midday and early afternoon**, weekday and weekend demand become much more similar.
+- The **afternoon/evening peak remains stronger on weekdays**, especially during the core commuting hours.
+- By late evening, demand shifts back toward **weekend dominance**.
+
+Overall, the weekday pattern is more commute-oriented, while weekends show relatively stronger late-night activity and a flatter daytime profile.
+
+### 3. Which origin→destination corridors dominate?
+
+**Question:** Which taxi origin→destination pairs have the most activity and total passender charges?
+
+Planned model: `int_od_daily`
+
+**Grain:** `pickup_zone_id × dropoff_zone_id × trip_date`
+
+Questions:
+
+- Which corridors have the highest trip volume?
+- Which generate the most revenue?
+- Which high-volume corridors have the longest average duration?
+- How does corridor activity change over time?
+
+### 4. Which corridors have the lowest travel efficiency?
+
+Calculate:
+
+`average_speed_mph = trip_distance / (trip_duration_minutes / 60)`
+
+Questions:
+
+- Which high-volume corridors have the lowest average speed?
+- Which corridors show unusually long travel times relative to distance?
+
+### 5. Detect unusual activity
+
+#### ** Question 5.1 ** Which zones have unusually high or low trip volume?
+
+Compare the latest incremental period with the historical demand pattern for each zone.
+
+The goal is to identify zones where recent trip activity is materially above or below what would normally be expected, providing an early signal of unusual demand or potential data-quality issues.
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q5_1_zone_volume_anomalies_v2.sql
+```
+
+The latest 7-day period was evaluated against each zone's historical 7-day demand distribution. An anomaly is defined as activity at least **3 standard deviations from the historical mean**.
+
+The analysis identified several zones with unusually high recent demand, with no zones showing statistically significant low-demand anomalies during the latest period.
+
+This approach is more robust than ranking percentage changes because it accounts for each zone's normal level and historical variability, reducing the influence of low-volume zones with large percentage swings.
+
+### Analytical limitations
+
+The dataset does not support:
+
+- **Customer behavior:** no rider ID, so no retention, cohorts, or LTV.
+- **Load factor:** no meaningful taxi capacity measure.
+- **Scheduled delays:** no scheduled arrival/departure times.
+- **Seasonality / YoY:** only Jan–Feb 2024.
+- **Total NYC activity:** data is a 10% trip sample.
+
+### Duration data quality
+
+Trip duration is calculated from pickup and drop-off timestamps. Based on profiling the observed duration distribution, trips longer than **180 minutes** are treated as duration outliers.
+
+Rather than filtering these trips out entirely, `stg_trips` adds an `is_valid_duration` boolean flag. This allows the trip to remain available for metrics such as trip count, fare, and distance while excluding invalid durations from duration-based analytics.
+
+`int_zone_daily` tracks `invalid_duration_trips` separately for data-quality visibility.
+
+### Planned modeling extensions
+
+```text
+stg_trips
+    │
+    ├── int_zone_daily
+    │       └── fct_zone_daily_snapshot
+    │
+    ├── int_zone_hourly
+    │       └── time-of-day demand
+    │
+    └── int_od_daily
+            └── origin→destination analysis

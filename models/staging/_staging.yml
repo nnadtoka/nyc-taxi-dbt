@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: stg_trips
+    description: >
+      Cleaned and standardized NYC taxi trip records used as the foundation
+      for downstream analytical models.
+
+    columns:
+      - name: is_valid_duration
+        description: >
+          Indicates whether trip duration falls within the accepted range
+          for duration-based analytics.
+        tests:
+          - not_null
+
+  - name: stg_zones
+    columns:
+      - name: zone_id
+        tests:
+          - not_null
+          - unique

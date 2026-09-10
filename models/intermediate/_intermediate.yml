@@ -1,0 +1,301 @@
+version: 2
+
+models:
+  - name: int_zone_hourly
+    description: >
+      Hourly pickup-zone aggregation of taxi trip activity.
+      Grain is one row per pickup zone, calendar date, and pickup hour.
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [zone_id, pickup_date, pickup_hour]
+
+    columns:
+      - name: zone_id
+        description: Pickup taxi zone identifier.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_zones')
+                field: zone_id
+
+      - name: pickup_date
+        description: Calendar date on which the trip started.
+        tests:
+          - not_null
+
+      - name: pickup_hour
+        description: Hour of day in which the trip started, from 0 to 23.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 23
+
+      - name: hourly_trips
+        description: Number of trips originating in the pickup zone during the hour.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: hourly_fare_sum
+        description: Sum of fare amounts for trips originating in the pickup zone during the hour.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: hourly_total_amount
+        description: >
+          Sum of total passenger charges for trips originating in the
+          pickup zone during the hour.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: hourly_duration_sum
+        description: >
+          Total trip duration in minutes for trips with a valid duration
+          originating in the pickup zone during the hour.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: hourly_distance_sum
+        description: Total trip distance for trips originating in the pickup zone during the hour.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: invalid_duration_trips
+        description: >
+          Number of trips with an invalid duration during the hour.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+  
+  - name: int_zone_daily
+    description: >
+      Daily pickup-zone aggregation of trip activity. Grain is one row
+      per pickup zone per calendar day with recorded trips.
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [zone_id, trip_date]
+
+    columns:
+      - name: zone_id
+        description: Pickup taxi zone identifier.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_zones')
+                field: zone_id
+
+      - name: trip_date
+        description: Date on which the trip started.
+        tests:
+          - not_null
+
+      - name: daily_trips
+        description: Number of trips originating in the pickup zone on the date.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_fare_sum
+        description: Sum of fare amounts for trips originating in the pickup zone on the date.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      
+      - name: invalid_duration_trips
+        description: >
+          Number of trips with a duration outside the accepted duration range
+          used for duration-based analytics.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_duration_sum
+        description: > 
+          Total trip duration in minutes for trips with a valid duration originating in the 
+          pickup zone on the date.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_distance_sum
+        description: Total trip distance for trips originating in the pickup zone on the date.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_total_amount
+        description: >
+          Sum of total passenger charges for trips originating in the
+          pickup zone on the date.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: int_dim_date
+    description: >
+      Continuous calendar date spine used to support complete time-series
+      analysis, including dates with no recorded trips.
+
+    columns:
+      - name: date_day
+        description: Calendar date.
+        tests:
+          - not_null
+          - unique
+
+      - name: year
+        description: Calendar year.
+
+      - name: month
+        description: Calendar month number.
+
+      - name: day_of_month
+        description: Day of the month.
+
+      - name: day_of_week
+        description: ISO day of week, where Monday is 1 and Sunday is 7.
+
+      - name: day_name
+        description: Name of the day.
+
+      - name: month_name
+        description: Name of the month.
+
+      - name: quarter
+        description: Calendar quarter.
+
+      - name: is_weekend
+        description: Whether the date falls on Saturday or Sunday.
+        tests:
+          - not_null
+          
+  - name: int_zone_route_daily
+    description: >
+      Daily aggregation of taxi trips by pickup and drop-off zone.
+      Each row represents a unique pickup-zone, drop-off-zone, and trip-date
+      combination. This intermediate model provides reusable daily route-level
+      metrics for analyzing trip volume, passenger charges, travel duration,
+      distance, and duration data quality.
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - pickup_zone_id
+              - dropoff_zone_id
+              - trip_date
+
+    columns:
+      - name: pickup_zone_id
+        description: >
+          Taxi zone where the trip originated.
+
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_zones')
+                field: zone_id
+
+      - name: dropoff_zone_id
+        description: >
+          Taxi zone where the trip ended.
+
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_zones')
+                field: zone_id
+
+      - name: trip_date
+        description: >
+          Calendar date on which the trip started.
+
+        tests:
+          - not_null
+
+      - name: daily_trips
+        description: >
+          Number of trips for the pickup and drop-off zone pair on the date.
+          Includes all valid trip records retained by the staging model.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_total_amount
+        description: >
+          Sum of total passenger charges for the pickup and drop-off zone pair
+          on the date.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_fare_sum
+        description: >
+          Sum of base fare amounts for the pickup and drop-off zone pair
+          on the date.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_duration_sum
+        description: >
+          Total trip duration in minutes for trips with a valid duration
+          in the pickup and drop-off zone pair on the date.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_distance_sum
+        description: >
+          Total recorded trip distance for the pickup and drop-off zone pair
+          on the date.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: invalid_duration_trips
+        description: >
+          Number of trips for the pickup and drop-off zone pair on the date
+          whose duration falls outside the accepted range for
+          duration-based analytics.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
