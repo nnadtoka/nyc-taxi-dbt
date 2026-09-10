@@ -7,12 +7,11 @@
 -- 2023-12-31 through 2024-02-29
 --
 -- Metric:
--- Average speed in miles per hour, calculated from total distance
--- and total valid trip duration.
+-- Average speed in miles per hour, calculated using only trips
+-- with a valid duration.
 --
 -- Minimum volume:
--- Only routes with at least 100 trips are included to reduce noise
--- from low-volume routes.
+-- Only routes with at least 100 valid trips are included.
 
 SELECT
     r.pickup_zone_id,
@@ -25,18 +24,20 @@ SELECT
 
     SUM(r.daily_trips) AS total_trips,
 
+    SUM(r.daily_valid_trips) AS valid_trips,
+
     ROUND(
-        SUM(r.daily_distance_sum),
+        SUM(r.daily_valid_distance_sum),
         2
-    ) AS total_distance_miles,
+    ) AS valid_distance_miles,
 
     ROUND(
         SUM(r.daily_duration_sum),
         2
-    ) AS total_duration_min,
+    ) AS valid_duration_min,
 
     ROUND(
-        SUM(r.daily_distance_sum)
+        SUM(r.daily_valid_distance_sum)
         / NULLIF(
             SUM(r.daily_duration_sum) / 60.0,
             0
@@ -53,6 +54,7 @@ LEFT JOIN dbt_taxi.stg_zones d
     ON r.dropoff_zone_id = d.zone_id
 
 WHERE r.trip_date BETWEEN DATE '2023-12-31' AND DATE '2024-02-29'
+
   AND p.zone_name IS NOT NULL
   AND d.zone_name IS NOT NULL
 
@@ -64,7 +66,7 @@ GROUP BY
     d.zone_name,
     d.borough
 
-HAVING SUM(r.daily_trips) >= 100
+HAVING SUM(r.daily_valid_trips) >= 100
 
 ORDER BY average_speed_mph ASC
 

@@ -192,13 +192,13 @@ models:
         description: Whether the date falls on Saturday or Sunday.
         tests:
           - not_null
-          
+
   - name: int_zone_route_daily
     description: >
       Daily aggregation of taxi trips by pickup and drop-off zone.
       Each row represents a unique pickup-zone, drop-off-zone, and trip-date
       combination. This intermediate model provides reusable daily route-level
-      metrics for analyzing trip volume, passenger charges, travel duration,
+      metrics for trip volume, passenger charges, fare, trip duration,
       distance, and duration data quality.
 
     tests:
@@ -242,7 +242,17 @@ models:
       - name: daily_trips
         description: >
           Number of trips for the pickup and drop-off zone pair on the date.
-          Includes all valid trip records retained by the staging model.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+      - name: daily_valid_trips
+        description: >
+          Number of trips with a valid duration for the pickup and drop-off
+          zone pair on the date. This represents the population used for
+          duration-dependent metrics such as average duration and average speed.
 
         tests:
           - dbt_utils.accepted_range:
@@ -251,8 +261,8 @@ models:
 
       - name: daily_total_amount
         description: >
-          Sum of total passenger charges for the pickup and drop-off zone pair
-          on the date.
+          Sum of total passenger charges for the pickup and drop-off zone
+          pair on the date.
 
         tests:
           - dbt_utils.accepted_range:
@@ -279,10 +289,22 @@ models:
               arguments:
                 min_value: 0
 
+      - name: daily_valid_distance_sum
+        description: >
+          Total trip distance for trips with a valid duration in the pickup
+          and drop-off zone pair on the date. This is used with
+          daily_duration_sum to calculate duration-dependent metrics
+          such as average speed.
+
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
       - name: daily_distance_sum
         description: >
-          Total recorded trip distance for the pickup and drop-off zone pair
-          on the date.
+          Total recorded trip distance for all trips in the pickup and
+          drop-off zone pair on the date.
 
         tests:
           - dbt_utils.accepted_range:

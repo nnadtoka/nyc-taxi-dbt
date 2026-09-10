@@ -77,11 +77,36 @@ docker run --name nyc-taxi --detach --publish 5438:5432 nyc-taxi
 docker exec -i nyc-taxi psql -U postgres -f - < analyses/profiling_raw.sql
 ```
 
-## Analytical questions
+## Executive summary
 
-The project is driven by analytical questions that determine the required model grain and transformations. We can also look at common routes between pickup and drop-off areas. For each pickup zone and drop-off zone combination, we can analyze how frequently people travel that route, how long those trips take, and how far they travel.
+The analysis is organized around a set of business questions designed to understand **where, when, and how taxi demand changes**, while demonstrating reusable analytical modeling patterns in dbt.
+
+| Area | Question | Purpose |
+|---|---|---|
+| **1. Demand trends by zone** | Which zones have the highest recent activity? | Identify the zones with the strongest current demand using trailing 7-day activity. |
+| | Which zones are seeing meaningful increases or decreases in recent demand? | Compare recent demand with a non-overlapping baseline using both relative and absolute change. |
+| | Which zones have the longest average trip duration? | Identify areas where trips tend to take the longest, using a minimum-volume threshold to reduce noise. |
+| **2. When and where demand peaks** | What are the busiest hours? | Identify the overall hourly demand pattern and sustained daily peak period. |
+| | What is the peak hour for each zone? | Show how demand timing varies by pickup zone rather than assuming one city-wide peak. |
+| | How do demand patterns differ by borough or service zone? | Compare hourly demand across geographic and service-area dimensions. |
+| | Do weekday and weekend patterns differ? | Compare normalized hourly demand patterns between weekdays and weekends. |
+| **3. Origin → destination corridors** | Which corridors have the highest trip volume? | Identify the most frequently traveled pickup-to-drop-off routes. |
+| | Which generate the most passenger charges? | Identify the routes with the greatest total passenger-charge value and contrast them with high-volume routes. |
+| | Which high-volume corridors have the longest average duration? | Identify frequently traveled routes with the greatest travel times using valid-duration trips. |
+| | Which corridors have the lowest travel efficiency? | Use average speed to identify high-volume routes where trips take the longest relative to distance. |
+| **4. Detect unusual activity** | Which zones have unusually high or low trip volume? | Detect statistically unusual recent demand by comparing the latest 7-day activity with each zone's historical distribution. An anomaly is defined as activity at least **3 standard deviations from the historical mean**. |
+
+Together, these questions move from **descriptive demand analysis** to **temporal and dimensional comparisons**, then to **origin-destination modeling**, and finally to **statistical anomaly detection**. This provides a progression from reusable data models to increasingly analytical use cases while keeping each question tied to a clear business purpose.
+
+
+Data modelling done here is done to answer specific selected questions that determine the required model grain and transformations. Corresponding queries, hopefully, named rather clearly, are placed under 
+```analyses```
+path in main project.
+
 
 ### 1. Demand trends by zone
+
+ We look at common routes between pickup and drop-off areas. For each pickup zone and drop-off zone combination, we can analyze how frequently people travel that route, how long those trips take, and how far they travel.
 
 #### **Question 1.1:** Which zones are experiencing rising or falling demand?
 
@@ -126,7 +151,7 @@ docker exec -i nyc-taxi psql -U postgres -f - < q1_3_longest_average_duration.sq
 ```
 
 
-### 2. When and where does demand peak?
+### 2. Demand patterns by time and geography
 
 **Question:** How does demand vary by time of day and day of week?
 
@@ -134,7 +159,6 @@ Planned model: `int_zone_hourly`
 
 **Grain:** `zone_id × pickup_date × pickup_hour`
 
-Questions:
 
 #### **Question 2.1:**  What are the busiest hours?
 
@@ -163,14 +187,18 @@ Overall, the analysis shows that demand timing is strongly influenced by the typ
 
 #### **Question 2.3:**  How do demand patterns differ by borough or service zone?
 
-
 ```
-docker exec -i nyc-taxi psql -U postgres -f - < q2_3_top_origin_destination_pairs.sql
-```
+ docker exec -i nyc-taxi psql -U postgres -f - < q2_3_demand_by_borough_service_zone.sql
+ ```
 
-The most frequently traveled pickup-to-drop-off pairs are concentrated within **Manhattan**, particularly among dense residential, commercial, and transit-oriented areas such as the Upper East Side, Upper West Side, Midtown, and nearby neighborhoods.
+Demand patterns vary considerably by geography and service-zone type.
 
-Several high-volume pairs are trips within the same zone, showing that substantial taxi activity also occurs over relatively local journeys. The routes with the highest trip volume broadly overlap with those generating the most passenger charges, although the rankings are not identical.
+- **Manhattan Yellow Zone** demand is substantially more concentrated and builds through the day, with the strongest activity in the afternoon and early evening.
+- **Boro Zone** activity follows a different pattern, with stronger morning demand and a gradual decline later in the day, particularly in Brooklyn and the Bronx.
+- **Queens Airports** show a distinct demand profile, with activity increasing from the morning into the afternoon and remaining elevated into the evening.
+- **Brooklyn Boro Zone** demand also remains relatively strong overnight and late in the evening compared with other borough-level Boro Zone patterns.
+
+Overall, the results show that taxi demand is shaped not only by borough, but also by the **type of service area**. Residential, commercial, and airport zones exhibit distinctly different hourly demand profiles.
 
 #### ** Question 2.4:** Do weekday and weekend patterns differ?
 
@@ -189,42 +217,69 @@ Weekday and weekend demand have distinctly different hourly patterns.
 
 Overall, the weekday pattern is more commute-oriented, while weekends show relatively stronger late-night activity and a flatter daytime profile.
 
-### 3. Which origin→destination corridors dominate?
+### 3. Origin → destination corridors
+
+Origin-to-destination analysis treats each pickup/drop-off pair as a distinct route, allowing us to compare trip volume, passenger charges, duration, and travel efficiency.
 
 **Question:** Which taxi origin→destination pairs have the most activity and total passender charges?
 
-Planned model: `int_od_daily`
+#### ** Question 3.1:** Which corridors have the highest trip volume?
 
-**Grain:** `pickup_zone_id × dropoff_zone_id × trip_date`
+``` 
+docker exec -i nyc-taxi psql -U postgres -f - < q3_1_top_origin_destination_pairs.sql
+```
 
-Questions:
+The highest-volume pickup-to-drop-off routes are concentrated in **Manhattan**, particularly among dense residential and commercial areas such as the Upper East Side, Midtown, Upper West Side, Lincoln Square, and Lenox Hill.
 
-- Which corridors have the highest trip volume?
-- Which generate the most revenue?
-- Which high-volume corridors have the longest average duration?
-- How does corridor activity change over time?
+Several of the most frequently traveled routes are within the same zone, showing that a significant share of taxi demand comes from local trips as well as travel between neighboring areas.
 
-### 4. Which corridors have the lowest travel efficiency?
+#### ** Question 3.2:**  Which generate the most revenue (passenger charges)?
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q3_2_top_origin_destination_charges.sql
+```
+
+The routes generating the highest passenger charges are dominated by **airport connections**, particularly trips between JFK or LaGuardia and major Manhattan destinations.
+
+Longer-distance airport trips generate substantially more passenger charges than many of the highest-volume local Manhattan routes. This highlights an important distinction between **trip volume and passenger-charge value**: the most frequently traveled routes are not necessarily the routes generating the most charges.
+
+#### ** Question 3.3:** Which high-volume corridors have the longest average duration?
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q3_3_longest_average_duration.sql
+```
+Among frequently traveled routes, the longest average trip durations are dominated by **JFK Airport connections**, both to and from Manhattan.
+
+The results show that route duration varies substantially by destination and origin, with airport trips generally taking longer than shorter intra-Manhattan routes. This provides a useful distinction between **route popularity** and **travel time**: a route can be frequently traveled while still requiring substantially more time to complete.
+
+#### ** Question 3.4:**  Which corridors have the lowest travel efficiency?
+
+```
+docker exec -i nyc-taxi psql -U postgres -f - < q3_4_route_travel_efficiency.sql
+```
 
 Calculate:
 
-`average_speed_mph = trip_distance / (trip_duration_minutes / 60)`
-
-Questions:
+`average_speed_mph = trip_distance / (duration_min / 60)`
 
 - Which high-volume corridors have the lowest average speed?
-- Which corridors show unusually long travel times relative to distance?
 
-### 5. Detect unusual activity
+The slowest high-volume corridors are concentrated in **dense Manhattan areas**, particularly around Midtown, Times Square, and Penn Station.
 
-#### ** Question 5.1 ** Which zones have unusually high or low trip volume?
+The Queensbridge/Ravenswood area shows the lowest average speed, consistent with the significant traffic congestion around the Queensboro Bridge and Queens Plaza. This represents a meaningful operational signal of slow urban travel.
+
+Travel efficiency is measured using average speed, calculated from trip distance and valid trip duration.
+
+### 4. Detect unusual activity
+
+#### ** Question 4.1 ** Which zones have unusually high or low trip volume?
 
 Compare the latest incremental period with the historical demand pattern for each zone.
 
 The goal is to identify zones where recent trip activity is materially above or below what would normally be expected, providing an early signal of unusual demand or potential data-quality issues.
 
 ```
-docker exec -i nyc-taxi psql -U postgres -f - < q5_1_zone_volume_anomalies_v2.sql
+docker exec -i nyc-taxi psql -U postgres -f - < q4_1_zone_volume_anomalies.sql
 ```
 
 The latest 7-day period was evaluated against each zone's historical 7-day demand distribution. An anomaly is defined as activity at least **3 standard deviations from the historical mean**.
@@ -247,20 +302,9 @@ The dataset does not support:
 
 Trip duration is calculated from pickup and drop-off timestamps. Based on profiling the observed duration distribution, trips longer than **180 minutes** are treated as duration outliers.
 
-Rather than filtering these trips out entirely, `stg_trips` adds an `is_valid_duration` boolean flag. This allows the trip to remain available for metrics such as trip count, fare, and distance while excluding invalid durations from duration-based analytics.
+Trip duration is derived from pickup and drop-off timestamps. Based on profiling, trips longer than **180 minutes** are treated as duration outliers.
 
-`int_zone_daily` tracks `invalid_duration_trips` separately for data-quality visibility.
+Rather than dropping these records, `stg_trips` adds an `is_valid_duration` flag. This keeps the trip available for activity, fare, and distance analysis while allowing duration-dependent metrics to use only valid trips.
 
-### Planned modeling extensions
+`int_zone_daily` and `int_zone_route_daily` track valid and invalid duration populations separately. Duration-based measures such as average duration and average speed use the consistent valid-trip population, while `invalid_duration_trips` provides data-quality visibility.
 
-```text
-stg_trips
-    │
-    ├── int_zone_daily
-    │       └── fct_zone_daily_snapshot
-    │
-    ├── int_zone_hourly
-    │       └── time-of-day demand
-    │
-    └── int_od_daily
-            └── origin→destination analysis

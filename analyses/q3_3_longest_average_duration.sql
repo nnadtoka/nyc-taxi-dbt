@@ -10,8 +10,8 @@
 -- Average valid trip duration for each pickup-to-drop-off pair.
 --
 -- Minimum volume:
--- Only routes with at least 100 trips during the analysis period
--- are included to reduce noise from low-volume routes.
+-- Only routes with at least 100 valid trips are included to reduce
+-- noise from low-volume routes.
 
 SELECT
     r.pickup_zone_id,
@@ -24,12 +24,11 @@ SELECT
 
     SUM(r.daily_trips) AS total_trips,
 
+    SUM(r.daily_valid_trips) AS valid_trips,
+
     ROUND(
         SUM(r.daily_duration_sum)
-        / NULLIF(
-            SUM(r.daily_trips) - SUM(r.invalid_duration_trips),
-            0
-        ),
+        / NULLIF(SUM(r.daily_valid_trips), 0),
         2
     ) AS avg_duration_min
 
@@ -54,7 +53,7 @@ GROUP BY
     d.zone_name,
     d.borough
 
-HAVING SUM(r.daily_trips) >= 100
+HAVING SUM(r.daily_valid_trips) >= 100
 
 ORDER BY avg_duration_min DESC
 

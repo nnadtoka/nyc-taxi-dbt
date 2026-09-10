@@ -6,6 +6,7 @@ select
     date(pickup_at) as trip_date,
 
     count(*) as daily_trips,
+    count(*) filter ( where is_valid_duration ) as daily_valid_trips,
 
     sum(total_amount) as daily_total_amount,
 
@@ -17,7 +18,12 @@ select
             else 0
         end
     ) as daily_duration_sum,
-
+    SUM(
+        CASE
+            WHEN is_valid_duration THEN trip_distance
+            ELSE 0
+        END
+    ) AS daily_valid_distance_sum,
     sum(trip_distance) as daily_distance_sum,
 
     count(*) filter (
