@@ -33,19 +33,18 @@ Observations from `analyses/profiling_raw.sql` on the loaded data:
 
 | Check | Result |
 |---|---|
-| Rows dropped by staging quality filters | **1.35%** (589,182 of 597,215 kept) |
+| Rows dropped by staging data-quality filters | **1.35%** (589,182 of 597,215 kept) |
 | Date span | **2023-12-31 → 2024-02-29**, 61 distinct days |
-| Zone coverage | **246** of ~262 zones have trips |
+| Zone coverage | **246 of 265** lookup zones have trips |
 | Snapshot rows vs dense zone-day grid | **8,945** actual vs **15,006** possible (~40% of zone-days have no trips) |
 
 Two quirks worth knowing:
 
-- **Out-of-month straggler.** The Jan/Feb files contain a single 2023-12-31
-  pickup — a known TLC trait where monthly files leak a few adjacent-month
-  timestamps. It shows up as the 61st day.
-- **Sparsity.** ~40% of zone-day combinations have no trips, so those rows are
-  simply absent. This is why a date spine (one row per zone per day) is a natural
-  next step for the snapshot model.
+- **Dates outside the month.** The January and February files include one trip
+  with a pickup date of **2023-12-31**. This means the data covers 61 days
+  instead of the expected 60 days. We keep this record because it is part of
+  the source data.
+- **Sparsity.** - **Sparsity.** ~40% of zone-day combinations have no trips in the observed data. These combinations are absent from the initial aggregation, which is why a date spine (one row per zone per day) is used for the snapshot model.
 
 ## Layers
 
@@ -106,13 +105,11 @@ path in main project.
 
 ### 1. Demand trends by zone
 
- We look at common routes between pickup and drop-off areas. For each pickup zone and drop-off zone combination, we can analyze how frequently people travel that route, how long those trips take, and how far they travel.
-
-#### **Question 1.1:** Which zones are experiencing rising or falling demand?
+#### **Question 1.1:** Which zones have the highest rolling 7-day trip volume?
 
 Using `fct_zone_daily_snapshot`:
 
-- Which zones have the highest trailing 7-day activity? 
+ 
 ```
 docker exec -i nyc-taxi psql -U postgres -f - < q1_1_highest_7d_activity.sql
 ```
@@ -155,7 +152,7 @@ docker exec -i nyc-taxi psql -U postgres -f - < q1_3_longest_average_duration.sq
 
 **Question:** How does demand vary by time of day and day of week?
 
-Planned model: `int_zone_hourly`
+Model: `int_zone_hourly`
 
 **Grain:** `zone_id × pickup_date × pickup_hour`
 
@@ -206,6 +203,7 @@ Overall, the results show that taxi demand is shaped not only by borough, but al
 docker exec -i nyc-taxi psql -U postgres -f - < q2_4_weekday_vs_weekend.sql
 ```
 
+Weekday and weekend demand are normalized to average trips per day using only complete Monday–Sunday weeks in the analysis period.
 
 Weekday and weekend demand have distinctly different hourly patterns.
 
@@ -219,7 +217,7 @@ Overall, the weekday pattern is more commute-oriented, while weekends show relat
 
 ### 3. Origin → destination corridors
 
-Origin-to-destination analysis treats each pickup/drop-off pair as a distinct route, allowing us to compare trip volume, passenger charges, duration, and travel efficiency.
+We look at common routes between pickup and drop-off areas. Each pickup zone and drop-off zone combination is treated as a distinct route, allowing us to compare how frequently people travel that route, how much they are charged, how long those trips take, and how efficiently they travel.
 
 **Question:** Which taxi origin→destination pairs have the most activity and total passender charges?
 
@@ -233,7 +231,7 @@ The highest-volume pickup-to-drop-off routes are concentrated in **Manhattan**, 
 
 Several of the most frequently traveled routes are within the same zone, showing that a significant share of taxi demand comes from local trips as well as travel between neighboring areas.
 
-#### ** Question 3.2:**  Which generate the most revenue (passenger charges)?
+#### ** Question 3.2:**  Which generate the most passenger charges?
 
 ```
 docker exec -i nyc-taxi psql -U postgres -f - < q3_2_top_origin_destination_charges.sql
@@ -248,6 +246,8 @@ Longer-distance airport trips generate substantially more passenger charges than
 ```
 docker exec -i nyc-taxi psql -U postgres -f - < q3_3_longest_average_duration.sql
 ```
+Average duration and average speed use only trips with valid duration measurements, with a minimum of 100 valid trips per corridor.
+
 Among frequently traveled routes, the longest average trip durations are dominated by **JFK Airport connections**, both to and from Manhattan.
 
 The results show that route duration varies substantially by destination and origin, with airport trips generally taking longer than shorter intra-Manhattan routes. This provides a useful distinction between **route popularity** and **travel time**: a route can be frequently traveled while still requiring substantially more time to complete.
@@ -258,23 +258,21 @@ The results show that route duration varies substantially by destination and ori
 docker exec -i nyc-taxi psql -U postgres -f - < q3_4_route_travel_efficiency.sql
 ```
 
-Calculate:
+Travel efficiency is measured using average speed:
 
 `average_speed_mph = trip_distance / (duration_min / 60)`
 
-- Which high-volume corridors have the lowest average speed?
+The analysis focuses on high-volume corridors and uses only trips with valid duration measurements.
 
-The slowest high-volume corridors are concentrated in **dense Manhattan areas**, particularly around Midtown, Times Square, and Penn Station.
+The slowest corridors are concentrated in dense Manhattan areas, particularly around Midtown, Times Square, and Penn Station.
 
-The Queensbridge/Ravenswood area shows the lowest average speed, consistent with the significant traffic congestion around the Queensboro Bridge and Queens Plaza. This represents a meaningful operational signal of slow urban travel.
-
-Travel efficiency is measured using average speed, calculated from trip distance and valid trip duration.
+The Queensbridge/Ravenswood area shows the lowest average speed, consistent with significant traffic congestion around the Queensboro Bridge and Queens Plaza. This represents a meaningful operational signal of slow urban travel.
 
 ### 4. Detect unusual activity
 
 #### ** Question 4.1 ** Which zones have unusually high or low trip volume?
 
-Compare the latest incremental period with the historical demand pattern for each zone.
+Compare the latest incremental (here, latest of our range 7 days) period with the historical demand pattern for each zone.
 
 The goal is to identify zones where recent trip activity is materially above or below what would normally be expected, providing an early signal of unusual demand or potential data-quality issues.
 
@@ -299,8 +297,6 @@ The dataset does not support:
 - **Total NYC activity:** data is a 10% trip sample.
 
 ### Duration data quality
-
-Trip duration is calculated from pickup and drop-off timestamps. Based on profiling the observed duration distribution, trips longer than **180 minutes** are treated as duration outliers.
 
 Trip duration is derived from pickup and drop-off timestamps. Based on profiling, trips longer than **180 minutes** are treated as duration outliers.
 
