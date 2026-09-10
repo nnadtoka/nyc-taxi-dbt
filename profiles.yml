@@ -1,0 +1,12 @@
+nyc_taxi:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5438
+      user: postgres
+      password: taxi
+      dbname: postgres
+      schema: dbt_taxi
+      threads: 4

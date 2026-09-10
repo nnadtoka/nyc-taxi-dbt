@@ -1,0 +1,7 @@
+.venv/
+raw_parquet/
+data/*.csv.gz
+target/
+dbt_packages/
+logs/
+*.log
