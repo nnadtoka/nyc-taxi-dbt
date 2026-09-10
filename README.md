@@ -36,15 +36,14 @@ Observations from `analyses/profiling_raw.sql` on the loaded data:
 | Rows dropped by staging data-quality filters | **1.35%** (589,182 of 597,215 kept) |
 | Date span | **2023-12-31 → 2024-02-29**, 61 distinct days |
 | Zone coverage | **246 of 265** lookup zones have trips |
-| Snapshot rows vs dense zone-day grid | **8,945** actual vs **15,006** possible (~40% of zone-days have no trips) |
-
+| Snapshot grid (after date spine) | **15,006** rows = 246 zones × 61 days; the ~40% that are zero-trip zone-days are filled by the spine |
 Two quirks worth knowing:
 
 - **Dates outside the month.** The January and February files include one trip
   with a pickup date of **2023-12-31**. This means the data covers 61 days
   instead of the expected 60 days. We keep this record because it is part of
   the source data.
-- **Sparsity.** - **Sparsity.** ~40% of zone-day combinations have no trips in the observed data. These combinations are absent from the initial aggregation, which is why a date spine (one row per zone per day) is used for the snapshot model.
+- **Sparsity.** ~40% of zone-day combinations have no trips in the observed data. These combinations are absent from the initial aggregation, which is why a date spine (one row per zone per day) is used for the snapshot model.
 
 ## Layers
 
